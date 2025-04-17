@@ -2,21 +2,24 @@ import os
 import asyncio
 import logging
 import requests
-from telethon import TelegramClient, events
-from telethon.tl.types import DocumentAttributeVideo, DocumentAttributeAudio
+from telethon import TelegramClient, events, Button
+from telethon.tl.types import DocumentAttributeVideo
 from telethon.errors import MessageNotModifiedError
 import yt_dlp
 
-api_id = 18377832
-api_hash = 'ed8556c450c6d0fd68912423325dd09c'
+# ---------------- تنظیمات کلاینت ----------------
+api_id = 18377832  # جایگزین کن با api_id واقعی
+api_hash = 'ed8556c450c6d0fd68912423325dd09c'  # جایگزین کن با api_hash واقعی
 session_name = 'anon'
 client = TelegramClient(session_name, api_id, api_hash)
 
+# ---------------- حافظه‌های موقت ----------------
 temp_formats = {}
 temp_thumbnails = {}
 user_requests = {}
 last_progress_text = {}
 
+# ---------------- ابزارها ----------------
 def create_progress_bar(percentage: float, width: int = 25) -> str:
     filled = int(width * percentage / 100)
     empty = width - filled
@@ -55,18 +58,18 @@ async def cleanup_temp_files(message_id, temp_filename):
     if message_id in last_progress_text:
         del last_progress_text[message_id]
 
-async def download_and_upload(event, url, title, quality, message_id, original_message, client, is_audio=False):
-    temp_filename = f"temp_{hash(url)}_{asyncio.get_event_loop().time()}.{'mp3' if is_audio else 'mp4'}"
+# ---------------- دانلود و ارسال ----------------
+async def download_and_upload(event, url, title, quality, message_id, original_message, client):
+    temp_filename = f"temp_{hash(url)}_{asyncio.get_event_loop().time()}.mp4"
     total_size, _ = get_file_size(url)
     downloaded = 0
     last_update_time = 0
 
     try:
-        await original_message.edit("📥 در حال دانلود...")
-
+        await original_message.edit("📥 در حال دانلود...", buttons=None)
         response = requests.get(url, stream=True)
         response.raise_for_status()
-
+        
         with open(temp_filename, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
@@ -85,13 +88,13 @@ async def download_and_upload(event, url, title, quality, message_id, original_m
                     )
                     if message_id not in last_progress_text or last_progress_text[message_id] != progress_text:
                         try:
-                            await original_message.edit(progress_text)
+                            await original_message.edit(progress_text, buttons=None)
                             last_progress_text[message_id] = progress_text
                         except MessageNotModifiedError:
                             pass
 
         last_update_time = 0
-
+        
         async def progress_callback(current, total):
             nonlocal last_update_time
             current_time = asyncio.get_event_loop().time()
@@ -108,7 +111,7 @@ async def download_and_upload(event, url, title, quality, message_id, original_m
                 )
                 if message_id not in last_progress_text or last_progress_text[message_id] != progress_text:
                     try:
-                        await original_message.edit(progress_text)
+                        await original_message.edit(progress_text, buttons=None)
                         last_progress_text[message_id] = progress_text
                     except MessageNotModifiedError:
                         pass
@@ -118,43 +121,27 @@ async def download_and_upload(event, url, title, quality, message_id, original_m
             duration = info.get('duration')
             view_count = info.get('view_count')
             like_count = info.get('like_count')
-
-            caption = f"🔗 لینک دانلود: {url}\n\n"
-            caption += f"🎥 عنوان: {title}\n"
-            if not is_audio:
-                caption += f"📹 کیفیت: {quality}\n"
-            else:
-                caption += f"🎧 فرمت: {quality}\n"
+            
+            caption = f"🎥 عنوان: {title}\n📹 کیفیت: {quality}\n"
             if duration:
                 caption += f"⏱ مدت زمان: {duration//60}:{duration%60:02d}\n"
-            if view_count and not is_audio:
+            if view_count:
                 caption += f"👁 بازدید: {view_count:,}\n"
-            if like_count and not is_audio:
+            if like_count:
                 caption += f"👍 لایک: {like_count:,}"
 
         thumb_filename = temp_thumbnails.get(message_id)
-
-        if not is_audio:
-            await client.send_file(
-                event.chat_id,
-                file=temp_filename,
-                caption=caption,
-                reply_to=message_id,
-                thumb=thumb_filename if thumb_filename and os.path.exists(thumb_filename) else None,
-                supports_streaming=True,
-                attributes=[DocumentAttributeVideo(duration=duration if duration else 0, w=1920, h=1080, supports_streaming=True)],
-                progress_callback=progress_callback
-            )
-        else:
-            await client.send_file(
-                event.chat_id,
-                file=temp_filename,
-                caption=caption,
-                reply_to=message_id,
-                thumb=thumb_filename if thumb_filename and os.path.exists(thumb_filename) else None,
-                attributes=[DocumentAttributeAudio(duration=duration if duration else 0)],
-                progress_callback=progress_callback
-            )
+        
+        await client.send_file(
+            event.chat_id,
+            file=temp_filename,
+            caption=caption,
+            reply_to=message_id,
+            thumb=thumb_filename if thumb_filename and os.path.exists(thumb_filename) else None,
+            supports_streaming=True,
+            attributes=[DocumentAttributeVideo(duration=duration if duration else 0, w=1920, h=1080, supports_streaming=True)],
+            progress_callback=progress_callback
+        )
         await original_message.delete()
 
     except Exception as e:
@@ -162,16 +149,16 @@ async def download_and_upload(event, url, title, quality, message_id, original_m
     finally:
         await cleanup_temp_files(message_id, temp_filename)
 
+# ---------------- مدیریت دستورات ----------------
 async def dl_handlers(client):
-    @client.on(events.NewMessage(pattern=r'.*(pornhub\.com|xvideos\.com|xnxx\.com|soundcloud\.com)/.*'))
+    @client.on(events.NewMessage(pattern=r'.*(pornhub\.com|xvideos\.com|xnxx\.com)/.*'))
     async def handle_url(event):
         url = event.message.text
         processing_msg = await event.reply("در حال پردازش لینک...")
-        is_soundcloud = "soundcloud.com" in url
 
         ydl_opts = {
             'quiet': True,
-            'format': 'bestaudio/best' if is_soundcloud else 'bestvideo+bestaudio/best',
+            'format': 'bestvideo+bestaudio/best',
             'noplaylist': True,
             'no_warnings': True,
         }
@@ -179,12 +166,12 @@ async def dl_handlers(client):
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-
+                
                 title = info.get('title', 'عنوان پیدا نشد')
                 thumbnail = info.get('thumbnail')
                 duration = info.get('duration')
                 view_count = info.get('view_count')
-
+                
                 thumb_filename = f"thumb_{hash(url)}.jpg"
                 if thumbnail and download_thumbnail(thumbnail, thumb_filename):
                     temp_thumbnails[event.message.id] = thumb_filename
@@ -192,25 +179,14 @@ async def dl_handlers(client):
                 formats = []
                 for f in info.get('formats', []):
                     protocol = f.get('protocol', '').lower()
-                    if f.get('url'):
-                        if is_soundcloud:
-                            if f.get('ext') in ['mp3', 'aac', 'flac', 'wav']:
-                                size_bytes, size_mb = get_file_size(f['url'])
-                                formats.append({
-                                    'quality': f.get('format', 'کیفیت نامشخص'),
-                                    'url': f.get('url'),
-                                    'size': size_mb,
-                                    'size_bytes': size_bytes
-                                })
-                        else:
-                            if f.get('ext') == 'mp4' and 'hls' not in protocol and 'm3u8' not in protocol:
-                                size_bytes, size_mb = get_file_size(f['url'])
-                                formats.append({
-                                    'quality': f.get('format', 'کیفیت نامشخص'),
-                                    'url': f.get('url'),
-                                    'size': size_mb,
-                                    'size_bytes': size_bytes
-                                })
+                    if f.get('url') and f.get('ext') == 'mp4' and 'hls' not in protocol and 'm3u8' not in protocol:
+                        size_bytes, size_mb = get_file_size(f['url'])
+                        formats.append({
+                            'quality': f.get('format', 'کیفیت نامشخص'),
+                            'url': f.get('url'),
+                            'size': size_mb,
+                            'size_bytes': size_bytes
+                        })
 
                 if not formats:
                     await processing_msg.edit("هیچ فرمتی پیدا نشد!")
@@ -221,54 +197,53 @@ async def dl_handlers(client):
                 user_requests[message_id] = {
                     'user_id': event.sender_id,
                     'formats': formats,
-                    'title': title,
-                    'is_soundcloud': is_soundcloud
+                    'title': title
                 }
 
-                format_lines = []
+                buttons = []
                 for i, fmt in enumerate(formats):
                     quality_text = fmt['quality'].split('-')[0].strip()
-                    format_lines.append(f"{i + 1}. {quality_text} ({fmt['size']})")
-
+                    buttons.append([Button.inline(f"{quality_text} ({fmt['size']})", data=f"dl_quality_{i}")])
+                
                 duration_str = f"\n⏱ مدت زمان: {duration//60}:{duration%60:02d}" if duration else ""
-                views_str = f"\n👁 بازدید: {view_count:,}" if view_count and not is_soundcloud else ""
-
+                views_str = f"\n👁 بازدید: {view_count:,}" if view_count else ""
+                
                 await processing_msg.delete()
                 await event.reply(
-                    f"{'🎧' if is_soundcloud else '🎥'} عنوان: {title}{duration_str}{views_str}\n"
-                    f"کیفیت مورد نظر رو با فرستادن شماره انتخاب کن (مثلاً: 1):\n\n" +
-                    "\n".join(format_lines),
+                    f"🎥 عنوان: {title}{duration_str}{views_str}\nکیفیت مورد نظر رو انتخاب کن:",
+                    buttons=buttons,
                     file=thumb_filename if os.path.exists(thumb_filename) else None
                 )
 
         except Exception as e:
             await processing_msg.edit(f"خطایی رخ داد: {str(e)}")
 
-    @client.on(events.NewMessage(pattern=r'^\d+$'))
-    async def handle_quality_selection(event):
+    @client.on(events.CallbackQuery(pattern=r'^dl_quality_\d+$'))
+    async def button(event):
         try:
-            message_id = event.reply_to_msg_id
-            if message_id not in user_requests:
+            data = event.data.decode('utf-8')
+            message = await event.get_message()
+            message_id = message.reply_to_msg_id if message.reply_to_msg_id else message.id
+            
+            if message_id not in user_requests or event.sender_id != user_requests[message_id]['user_id']:
+                await event.answer("شما اجازه انتخاب کیفیت برای درخواست کاربر دیگر را ندارید!", alert=True)
                 return
 
-            if user_requests[message_id]['user_id'] != event.sender_id:
-                await event.reply("شما اجازه انتخاب کیفیت برای این لینک را ندارید.")
-                return
+            request_info = user_requests[message_id]
+            title = request_info['title']
+            formats = request_info['formats']
 
-            selection = int(event.text.strip()) - 1
-            formats = user_requests[message_id]['formats']
-            title = user_requests[message_id]['title']
-            is_soundcloud = user_requests[message_id].get('is_soundcloud', False)
+            if data.startswith("dl_quality_"):
+                fmt_index = int(data.split('_')[2])
+                if fmt_index < len(formats):
+                    selected_format = formats[fmt_index]
+                    quality_text = selected_format['quality'].split('-')[0].strip()
+                    await download_and_upload(event, selected_format['url'], title, quality_text, message_id, message, client)
 
-            if 0 <= selection < len(formats):
-                selected_format = formats[selection]
-                quality_text = selected_format['quality'].split('-')[0].strip()
-                await download_and_upload(event, selected_format['url'], title, quality_text, message_id, event.message, client, is_soundcloud)
-            else:
-                await event.reply("شماره انتخابی معتبر نیست.")
         except Exception as e:
-            await event.reply(f"خطایی رخ داد: {str(e)}")
+            await event.answer(f"خطایی رخ داد: {str(e)}", alert=True)
 
+# ---------------- اجرای برنامه ----------------
 async def main():
     await dl_handlers(client)
     print("ربات آماده است.")
